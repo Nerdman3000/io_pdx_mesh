@@ -452,6 +452,17 @@ class IOPDX_OT_import_anim(Operator, ImportHelper):
         default=False,
     )
     # fmt:on
+    rotate_ground_joint: BoolProperty(
+        name="Rotate ground_joint",
+        description="Force a rotation into ground_joint on import",
+        default=False
+    )
+
+    rotate_ground_amount: IntProperty(
+        name="Rotation degrees",
+        description="Degrees to rotate on Z axis",
+        default=0
+    )
 
     def draw(self, context):
         box = self.layout.box()
@@ -459,10 +470,19 @@ class IOPDX_OT_import_anim(Operator, ImportHelper):
         box.prop(self, "int_start")
         box.prop(self, "force_selected_rig")
         box.prop(self, "ignore_missing_bones")
+        box.prop(self, "rotate_ground_joint")
+        box.prop(self, "rotate_ground_amount")
 
     def execute(self, context):
         try:
-            import_animfile(self.filepath, frame_start=self.int_start, use_selected_rig=self.force_selected_rig, ignore_missing_bones=self.ignore_missing_bones)
+            import_animfile(
+                self.filepath,
+                frame_start=self.int_start,
+                use_selected_rig=self.force_selected_rig,
+                ignore_missing_bones=self.ignore_missing_bones,
+                rotate_ground_joint=self.rotate_ground_joint,
+                rotate_ground_amount=self.rotate_ground_amount
+            )
             self.report({"INFO"}, "[io_pdx_mesh] Finsihed importing {}".format(self.filepath))
             IO_PDX_SETTINGS.last_import_anim = self.filepath
 
@@ -483,7 +503,7 @@ class IOPDX_OT_import_anim(Operator, ImportHelper):
 
 class IOPDX_OT_transfer_anim_from_file(Operator, ImportHelper):
     bl_idname = "io_pdx_mesh.transfer_anim_from_file"
-    bl_description = bl_label = "Transfer keys from other .anim, such as a older version of a .anim, into current action"
+    bl_description = bl_label = "Transfer animation keyframes from matching bones from a different .anim file, such as a older version of a .anim, into current animation."
     bl_options = {"REGISTER", "UNDO"}
 
     filename_ext = ".anim"
@@ -502,16 +522,19 @@ class IOPDX_OT_transfer_anim_from_file(Operator, ImportHelper):
         description="Frame where old keys will be pasted",
         default=1,
     )
-    opt_location: BoolProperty(
-        name="Overwrite location",
-        default=False,
-    )
     opt_rotation: BoolProperty(
         name="Overwrite rotation",
+        description="Overwrite all bone rotation animation data with source animation.",
         default=True,
+    )
+    opt_location: BoolProperty(
+        name="Overwrite location",
+        description="Overwrite all bone location animation data with source animation. \n\nNOTE: It is recommended that this only be used with select bones. It will usually screw up the animation if applied on the full animaton.",
+        default=False,
     )
     opt_scale: BoolProperty(
         name="Overwrite scale",
+        description="Overwrite all bone scale animation data with source animation. \n\nNOTE: It is recommended that this only be used with select bones.",
         default=False,
     )
     ignore_missing_bones: BoolProperty(
@@ -539,8 +562,8 @@ class IOPDX_OT_transfer_anim_from_file(Operator, ImportHelper):
 
         box = col.box()
         box.label(text="Overwrite:")
-        box.prop(self, "opt_location")
         box.prop(self, "opt_rotation")
+        box.prop(self, "opt_location")
         box.prop(self, "opt_scale")
 
         box2 = col.box()

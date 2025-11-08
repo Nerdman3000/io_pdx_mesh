@@ -1621,7 +1621,7 @@ def export_meshfile(meshpath, exp_mesh=True, exp_skel=True, exp_locs=True, exp_s
 
 
 @allow_debug_logging
-def import_animfile(animpath, frame_start=1, ignore_missing_bones=False, plain_txt=False, use_selected_rig=False, **kwargs):
+def import_animfile(animpath, frame_start=1, ignore_missing_bones=False, plain_txt=False, use_selected_rig=False, rotate_ground_joint=False, rotate_ground_amount=0, **kwargs):
     start = time.time()
     IO_PDX_LOG.info("importing - {0}".format(animpath))
 
@@ -1736,6 +1736,16 @@ def import_animfile(animpath, frame_start=1, ignore_missing_bones=False, plain_t
 
             # record the initial pose as the basis for subsequent keyframes
             initial_pose[bone_name] = pose_bone.matrix
+            
+            if rotate_ground_joint and "ground_joint" in initial_pose:
+                pose_bone = rig.pose.bones.get("ground_joint")
+                if pose_bone:
+                    import math
+                    rot_rad = math.radians(rotate_ground_amount)
+                    q = Quaternion((0, 0, 1), rot_rad)
+                    pose_bone.rotation_mode = "QUATERNION"
+                    pose_bone.rotation_quaternion = q
+                    pose_bone.keyframe_insert(data_path="rotation_quaternion", index=-1, group="ground_joint")
 
     # check which transform types are animated on each bone
     all_bone_keyframes = OrderedDict()
