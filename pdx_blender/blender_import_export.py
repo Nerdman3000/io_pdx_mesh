@@ -27,6 +27,8 @@ import bmesh  # type: ignore
 import bpy  # type: ignore
 from mathutils import Matrix, Quaternion, Vector  # type: ignore
 
+from typing import Dict, List, Tuple, Set, Optional
+
 from .. import IO_PDX_LOG, pdx_data
 from ..library import (
     PDX_ANIMATION,
@@ -836,16 +838,18 @@ def create_locator(PDX_locator, PDX_bone_dict):
     return new_loc
 
 
-def create_skeleton(PDX_bone_list, convert_bonespace=False):
+def create_skeleton(PDX_bone_list, convert_bonespace=False, chek_always_new_rig=False):
     # keep track of bones as we create them (may not be created in indexed order)
     bone_list = [None for _ in range(0, len(PDX_bone_list))]
 
     # check this skeleton is not already built in the scene
     matching_rigs = [get_rig_from_bone_name(clean_imported_name(bone.name)) for bone in PDX_bone_list]
     matching_rigs = list(set(rig for rig in matching_rigs if rig))
-    if len(matching_rigs) == 1:
-        IO_PDX_LOG.debug("matching armature already found in scene")
-        return matching_rigs[0]
+    
+    if not chek_always_new_rig:
+        if len(matching_rigs) == 1:
+            IO_PDX_LOG.debug("matching armature already found in scene")
+            return matching_rigs[0]
 
     # temporary name used during creation
     tmp_rig_name = "io_pdx_rig"
@@ -1254,7 +1258,7 @@ def create_anim_keys(armature, bone_name, key_dict, timestart, pose, ignore_miss
 
 
 @allow_debug_logging
-def import_meshfile(meshpath, imp_mesh=True, imp_skel=True, imp_locs=True, join_materials=True, **kwargs):
+def import_meshfile(meshpath, imp_mesh=True, imp_skel=True, imp_locs=True, join_materials=True, bonespace=False, chek_always_new_rig=False, **kwargs):
     # kwargs wrangling
     # correct bone orientation on import
     bonespace = kwargs.get("bonespace", False)
@@ -1288,7 +1292,7 @@ def import_meshfile(meshpath, imp_mesh=True, imp_skel=True, imp_locs=True, join_
 
             if imp_skel:
                 IO_PDX_LOG.info("creating skeleton -")
-                rig = create_skeleton(pdx_bone_list, convert_bonespace=bonespace)
+                rig = create_skeleton(pdx_bone_list, convert_bonespace=bonespace, chek_always_new_rig=chek_always_new_rig)
 
         # then create all the meshes
         meshes = node.findall("mesh")
@@ -1617,7 +1621,7 @@ def export_meshfile(meshpath, exp_mesh=True, exp_skel=True, exp_locs=True, exp_s
 
 
 @allow_debug_logging
-def import_animfile(animpath, frame_start=1, ignore_missing_bones=False, plain_txt=False, **kwargs):
+def import_animfile(animpath, frame_start=1, ignore_missing_bones=False, plain_txt=False, use_selected_rig=False, **kwargs):
     start = time.time()
     IO_PDX_LOG.info("importing - {0}".format(animpath))
 
@@ -1646,13 +1650,17 @@ def import_animfile(animpath, frame_start=1, ignore_missing_bones=False, plain_t
 
     # find armature and bones being animated in the scene
     IO_PDX_LOG.info("finding armature -")
-    matching_rigs = [get_rig_from_bone_name(clean_imported_name(bone.tag)) for bone in info]
-    matching_rigs = list(set(rig for rig in matching_rigs if rig))
-
-    # break on failing to find an armature to animate
-    if len(matching_rigs) != 1:
-        raise RuntimeError("Missing unique armature required for animation: {0}".format(matching_rigs))
-    rig = matching_rigs[0]
+    
+    if use_selected_rig:
+        rig = bpy.context.active_object
+        if not rig or not isinstance(rig.data, bpy.types.Armature):
+            raise RuntimeError("Selected object is not an armature")
+    else:
+        matching_rigs = [get_rig_from_bone_name(clean_imported_name(bone.tag)) for bone in info]
+        matching_rigs = list(set(rig for rig in matching_rigs if rig))
+        if len(matching_rigs) != 1:
+            raise RuntimeError("Missing unique armature required for animation: {0}".format(matching_rigs))
+        rig = matching_rigs[0]
 
     # check armature has all required bones, check scale uniformity
     IO_PDX_LOG.info("finding bones -")
@@ -1806,7 +1814,6 @@ def import_animfile(animpath, frame_start=1, ignore_missing_bones=False, plain_t
                     txt_file.write(f"  {key_type}: {key_values}\n")
                 txt_file.write("\n")
 
-
 @allow_debug_logging
 def export_animfile(animpath, frame_start=1, frame_end=10, **kwargs):
     # kwargs wrangling
@@ -1938,3 +1945,226 @@ def export_animfile(animpath, frame_start=1, frame_end=10, **kwargs):
 
     bpy.ops.object.select_all(action="DESELECT")
     IO_PDX_LOG.info("export finished! ({0:.4f} sec)".format(time.time() - start))
+
+def parse_animfile_to_keydict(animpath: str, ignore_missing_bones: bool = False):
+    """
+    Parse a .anim file and return:
+      rig: bpy.types.Object armature found from the file's bones
+      fps: int
+      framecount: int
+      initial_pose: Dict[str, mathutils.Matrix] initial matrices per bone in Blender space
+      all_bone_keyframes: OrderedDict[str, Dict[str, List[List[float]]]] with keys 't','q','s'
+                          lists are per-frame samples, already in PDX->Blender space and
+                          quaternion is xyzw.
+    Does not write any keyframes to Blender. Mirrors import_animfile logic.
+    """
+    start = time.time()
+    IO_PDX_LOG.info(f"parsing anim (no key write) - {animpath}")
+
+    # read and basic info
+    asset_elem = pdx_data.read_meshfile(animpath)
+    info = asset_elem.find("info")
+    samples = asset_elem.find("samples")
+    framecount = int(info.attrib["sa"][0])
+    fps = int(info.attrib["fps"][0])
+
+    # find armature to target from the bones present in file
+    matching_rigs = [get_rig_from_bone_name(clean_imported_name(bone.tag)) for bone in info]
+    matching_rigs = list(set(rig for rig in matching_rigs if rig))
+    if len(matching_rigs) != 1:
+        raise RuntimeError(f"Missing unique armature required for animation: {matching_rigs}")
+    rig = matching_rigs[0]
+
+    # bone presence and scale uniformity, mirrors importer
+    scale_length = set()
+    bone_errors = []
+    available_bones = []
+    for bone in info:
+        scale_length.add(len(bone.attrib["s"]))
+        bone_name = clean_imported_name(bone.tag)
+        try:
+            _ = rig.pose.bones[bone_name]
+            available_bones.append(bone_name)
+        except KeyError:
+            bone_errors.append(bone_name)
+            IO_PDX_LOG.warning(f"failed to find bone - {bone_name}")
+
+    if bone_errors:
+        if ignore_missing_bones:
+            IO_PDX_LOG.warning(f"Ignoring missing bones: {bone_errors}")
+        else:
+            raise RuntimeError(f"Missing bones required for animation: {bone_errors}")
+
+    if len(scale_length) != 1:
+        raise NotImplementedError(f"Mixed length scale vectors ({scale_length}) are not supported")
+    scale_length = scale_length.pop()
+    scale_padding = 4 - scale_length
+
+    # build initial_pose, identical to importer, but do not insert keys
+    initial_pose = dict()
+    for bone in info:
+        bone_name = clean_imported_name(bone.tag)
+        if ignore_missing_bones and bone_name not in rig.pose.bones:
+            continue
+        pose_bone = rig.pose.bones[bone_name]
+        edit_bone = pose_bone.bone
+
+        _scale = Matrix.Diagonal(bone.attrib["s"] * scale_padding).to_4x4()
+        _rotation = Quaternion((bone.attrib["q"][3], bone.attrib["q"][0], bone.attrib["q"][1], bone.attrib["q"][2])).to_matrix().to_4x4()
+        _translation = Matrix.Translation(bone.attrib["t"])
+
+        offset_matrix = swap_coord_space(_translation @ _rotation @ _scale)
+
+        parent_matrix = Matrix()
+        if edit_bone.parent:
+            parent_matrix = edit_bone.parent.matrix_local
+
+        # same composition as importer, no keyframe_insert here
+        pose_bone.rotation_mode = "QUATERNION"
+        pose_matrix = (offset_matrix.transposed() @ parent_matrix.transposed()).transposed()
+        initial_pose[bone_name] = pose_matrix
+
+    # collect per-frame key samples into all_bone_keyframes
+    from collections import OrderedDict
+    all_bone_keyframes = OrderedDict()
+    valid_bones = []
+    for bone in info:
+        bone_name = clean_imported_name(bone.tag)
+        if ignore_missing_bones and bone_name not in rig.pose.bones:
+            continue
+        all_bone_keyframes[bone_name] = {sample_type: [] for sample_type in bone.attrib["sa"][0]}
+        valid_bones.append(bone_name)
+
+    s_idx, q_idx, t_idx = 0, 0, 0
+    s_len, q_len, t_len = scale_length, 4, 3
+
+    for _ in range(0, framecount):
+        for bone in info:
+            bone_name = clean_imported_name(bone.tag)
+
+            if ignore_missing_bones and bone_name not in valid_bones:
+                # advance indices so parsing stays aligned
+                sample_types = bone.attrib["sa"][0]
+                if "s" in sample_types:
+                    s_idx += s_len
+                if "q" in sample_types:
+                    q_idx += q_len
+                if "t" in sample_types:
+                    t_idx += t_len
+                continue
+
+            if bone_name not in all_bone_keyframes:
+                continue
+
+            bone_key_data = all_bone_keyframes[bone_name]
+            if "s" in bone_key_data:
+                frame_bone_scale = samples.attrib["s"][s_idx : s_idx + s_len] * scale_padding
+                bone_key_data["s"].append(frame_bone_scale)
+                s_idx += s_len
+            if "q" in bone_key_data:
+                frame_bone_quat = samples.attrib["q"][q_idx : q_idx + q_len]  # already xyzw
+                bone_key_data["q"].append(frame_bone_quat)
+                q_idx += q_len
+            if "t" in bone_key_data:
+                frame_bone_trans = samples.attrib["t"][t_idx : t_idx + t_len]
+                # swap to Blender space for vectors
+                frame_bone_trans = list(swap_coord_space(frame_bone_trans))
+                bone_key_data["t"].append(frame_bone_trans)
+                t_idx += t_len
+
+    IO_PDX_LOG.info(f"parsed anim in {(time.time()-start):.4f} sec")
+    return rig, fps, framecount, initial_pose, all_bone_keyframes
+    
+def remove_bone_fcurves(action: bpy.types.Action, bone_name: str, attrs: set):
+    if action is None:
+        return
+
+    data_paths = []
+    if "location" in attrs:
+        data_paths.append(f'pose.bones["{bone_name}"].location')
+    if "rotation_quaternion" in attrs:
+        data_paths.append(f'pose.bones["{bone_name}"].rotation_quaternion')
+    if "scale" in attrs:
+        data_paths.append(f'pose.bones["{bone_name}"].scale')
+
+    # collect fcurves first
+    to_remove = [fc for fc in action.fcurves if fc.data_path in data_paths]
+    for fc in to_remove:
+        action.fcurves.remove(fc)
+    
+def transfer_anim_keys_from_file(
+    old_animpath: str,
+    frame_start: int = 1,
+    target_rig: Optional[bpy.types.Object] = None,
+    overwrite_attrs: Set[str] = frozenset({"location", "rotation_quaternion", "scale"}),
+    ignore_missing_bones: bool = True,
+    only_selected_bones: bool = False,
+    skip_eye_bones=False,
+):
+    """
+    Load keys from old_animpath, then overwrite matching bone attributes in the current action,
+    leaving all other bones and attributes untouched.
+    """
+    rig, fps, framecount, initial_pose, keydict = parse_animfile_to_keydict(
+        old_animpath, ignore_missing_bones=ignore_missing_bones
+    )
+    if target_rig is not None:
+        rig = target_rig
+        
+    selected_bones = None
+    if only_selected_bones and rig and rig.mode == 'POSE':
+        selected_bones = {pbone.name for pbone in rig.pose.bones if pbone.bone.select}
+
+    # ensure action exists and the scene range matches transfer window
+    if rig.animation_data is None:
+        rig.animation_data_create()
+    if rig.animation_data.action is None:
+        rig.animation_data.action = bpy.data.actions.new(name=rig.name + "_action")
+    action = rig.animation_data.action
+
+    bpy.context.scene.render.fps = fps
+    bpy.context.scene.render.fps_base = 1.0
+    bpy.context.scene.frame_start = frame_start
+    bpy.context.scene.frame_end = frame_start + framecount - 1
+
+    # remove destination curves for the attributes we will overwrite
+    for bone_name, bone_keys in keydict.items():
+        if selected_bones is not None and bone_name not in selected_bones:
+            continue
+        if skip_eye_bones:
+            low = bone_name.lower()
+            if "eye" in low and not low.endswith("_rotate"):
+                continue
+        # only remove paths that correspond to existing key types in the source
+        attrs_to_clear = set()
+        if "t" in bone_keys and "location" in overwrite_attrs:
+            attrs_to_clear.add("location")
+        else:
+            bone_keys.pop("t", None)  # remove translation keys entirely if not overwriting location
+        if "q" in bone_keys and "rotation_quaternion" in overwrite_attrs:
+            attrs_to_clear.add("rotation_quaternion")
+        else:
+            bone_keys.pop("q", None)  # remove translation keys entirely if not overwriting location
+        if "s" in bone_keys and "scale" in overwrite_attrs:
+            attrs_to_clear.add("scale")
+        else:
+            bone_keys.pop("s", None)  # remove translation keys entirely if not overwriting location
+
+        remove_bone_fcurves(action, bone_name, attrs_to_clear)
+
+    # write the keys using existing pathway
+    for bone_name, bone_keys in keydict.items():
+        if selected_bones is not None and bone_name not in selected_bones:
+            continue
+        if skip_eye_bones:
+            low = bone_name.lower()
+            if "eye" in low and not low.endswith("_rotate"):
+                continue
+        if not bone_keys.values():
+            continue
+        # create_anim_keys expects 't','q','s' lists in Blender space, which we have
+        create_anim_keys(rig, bone_name, bone_keys, frame_start, initial_pose, ignore_missing_bones)
+
+    bpy.context.scene.frame_set(frame_start)
+    bpy.context.view_layer.update()
+    IO_PDX_LOG.info("transfer complete")

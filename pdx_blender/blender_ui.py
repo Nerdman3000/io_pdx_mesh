@@ -16,6 +16,8 @@ from .. import ENGINE_SETTINGS, IO_PDX_INFO, IO_PDX_LOG, IO_PDX_SETTINGS
 from ..pdx_data import PDXData
 from ..updater import github
 
+from .blender_import_export import transfer_anim_keys_from_file
+
 try:
     from . import blender_import_export
 
@@ -346,6 +348,11 @@ class IOPDX_OT_import_mesh(Operator, ImportHelper):
         description="Import skeleton",
         default=True,
     )
+    chek_always_new_rig: BoolProperty(
+        name="Always create new rig",
+        description="Do not skip rig creation even if a matching rig exists in the scene",
+        default=True,
+    )
     chk_locs: BoolProperty(
         name="Import locators",
         description="Import locators",
@@ -374,6 +381,11 @@ class IOPDX_OT_import_mesh(Operator, ImportHelper):
             _, col = split.column(), split.column()
             col.prop(self, "chk_joinmats")
         box.prop(self, "chk_skel")
+        if self.chk_skel:
+            mesh_settings = box.box()
+            split = mesh_settings.split(factor=0.1)
+            _, col = split.column(), split.column()
+            col.prop(self, "chek_always_new_rig")
         box.prop(self, "chk_locs")
         # box.prop(self, 'chk_bonespace')  # TODO: works but overcomplicates things, disabled for now
 
@@ -386,6 +398,7 @@ class IOPDX_OT_import_mesh(Operator, ImportHelper):
                 imp_locs=self.chk_locs,
                 join_materials=self.chk_joinmats,
                 bonespace=self.chk_bonespace,
+                chek_always_new_rig=self.chek_always_new_rig,
             )
             self.report({"INFO"}, "[io_pdx_mesh] Finished importing {}".format(self.filepath))
             IO_PDX_SETTINGS.last_import_mesh = self.filepath
@@ -428,11 +441,15 @@ class IOPDX_OT_import_anim(Operator, ImportHelper):
         description="Start frame",
         default=1,
     )
-
+    force_selected_rig: BoolProperty(
+        name="Selected Only",
+        description="Apply animation to the currently selected armature instead of auto detect",
+        default=True
+    )
     ignore_missing_bones: BoolProperty(
-    name="Ignore missing bones",
-    description="If enabled, ignore missing bones during animation import",
-    default=False,
+        name="Ignore missing bones",
+        description="If enabled, ignore missing bones during animation import",
+        default=False,
     )
     # fmt:on
 
@@ -440,11 +457,12 @@ class IOPDX_OT_import_anim(Operator, ImportHelper):
         box = self.layout.box()
         box.label(text="Settings:", icon="IMPORT")
         box.prop(self, "int_start")
+        box.prop(self, "force_selected_rig")
         box.prop(self, "ignore_missing_bones")
 
     def execute(self, context):
         try:
-            import_animfile(self.filepath, frame_start=self.int_start, ignore_missing_bones=self.ignore_missing_bones)
+            import_animfile(self.filepath, frame_start=self.int_start, use_selected_rig=self.force_selected_rig, ignore_missing_bones=self.ignore_missing_bones)
             self.report({"INFO"}, "[io_pdx_mesh] Finsihed importing {}".format(self.filepath))
             IO_PDX_SETTINGS.last_import_anim = self.filepath
 
@@ -463,6 +481,108 @@ class IOPDX_OT_import_anim(Operator, ImportHelper):
 
         return {"RUNNING_MODAL"}
 
+class IOPDX_OT_transfer_anim_from_file(Operator, ImportHelper):
+    bl_idname = "io_pdx_mesh.transfer_anim_from_file"
+    bl_description = bl_label = "Transfer keys from other .anim, such as a older version of a .anim, into current action"
+    bl_options = {"REGISTER", "UNDO"}
+
+    filename_ext = ".anim"
+    # fmt:off
+    filter_glob: StringProperty(
+        default="*.anim",
+        options={"HIDDEN"},
+        maxlen=255,
+    )
+    filepath: StringProperty(
+        name="Old .anim path",
+        maxlen=1024,
+    )
+    int_start: IntProperty(
+        name="Paste start frame",
+        description="Frame where old keys will be pasted",
+        default=1,
+    )
+    opt_location: BoolProperty(
+        name="Overwrite location",
+        default=False,
+    )
+    opt_rotation: BoolProperty(
+        name="Overwrite rotation",
+        default=True,
+    )
+    opt_scale: BoolProperty(
+        name="Overwrite scale",
+        default=False,
+    )
+    ignore_missing_bones: BoolProperty(
+        name="Ignore missing bones",
+        description="If enabled, skip bones that are not present on the target rig instead of failing",
+        default=True,
+    )
+    only_selected_bones: BoolProperty(
+        name="Only selected bones",
+        description="If enabled, only transfer keys for bones that are selected in pose mode",
+        default=False,
+    )
+    skip_eye_bones: BoolProperty(
+        name="Skip eyelid bones",
+        description="Do not overwrite animation data for eyelid bones. \n\nNOTE: Prevents some older .anim files from screwing up eyes without having to select bones",
+        default=True,
+    )
+    # fmt:on
+
+    def draw(self, context):
+        box = self.layout.box()
+        box.label(text="Transfer settings:", icon="FILE_REFRESH")
+        col = box.column(align=True)
+        col.prop(self, "int_start")
+
+        box = col.box()
+        box.label(text="Overwrite:")
+        box.prop(self, "opt_location")
+        box.prop(self, "opt_rotation")
+        box.prop(self, "opt_scale")
+
+        box2 = col.box()
+        box2.label(text="Bone filtering:")
+        box2.prop(self, "ignore_missing_bones")
+        box2.prop(self, "only_selected_bones")
+        box2.prop(self, "skip_eye_bones")
+
+    def execute(self, context):
+        attrs = set()
+        if self.opt_location:
+            attrs.add("location")
+        if self.opt_rotation:
+            attrs.add("rotation_quaternion")
+        if self.opt_scale:
+            attrs.add("scale")
+
+        try:
+            transfer_anim_keys_from_file(
+                self.filepath,
+                frame_start=self.int_start,
+                target_rig=context.active_object if isinstance(getattr(context.active_object, "data", None), bpy.types.Armature) else None,
+                overwrite_attrs=attrs,
+                ignore_missing_bones=self.ignore_missing_bones,
+                only_selected_bones=self.only_selected_bones,
+                skip_eye_bones=self.skip_eye_bones,
+            )
+            self.report({"INFO"}, "[io_pdx_mesh] Transferred keys from {}".format(self.filepath))
+            IO_PDX_SETTINGS.last_import_anim = self.filepath
+        except Exception as err:
+            IO_PDX_LOG.warning("FAILED to transfer keys from {0}".format(self.filepath))
+            IO_PDX_LOG.error(err)
+            self.report({"WARNING"}, "Key transfer failed!")
+            self.report({"ERROR"}, str(err))
+            raise
+
+        return {"FINISHED"}
+
+    def invoke(self, context, event):
+        self.filepath = IO_PDX_SETTINGS.last_import_anim or ""
+        context.window_manager.fileselect_add(self)
+        return {"RUNNING_MODAL"}
 
 class IOPDX_OT_export_mesh(Operator, ExportHelper):
     bl_idname = "io_pdx_mesh.export_mesh"
@@ -785,11 +905,15 @@ class IOPDX_PT_PDXblender_file(PDXUI, Panel):
         row = self.layout.row(align=True)
         row.operator("io_pdx_mesh.import_mesh", icon="MESH_CUBE", text="Load mesh ...")
         row.operator("io_pdx_mesh.import_anim", icon="RENDER_ANIMATION", text="Load anim ...")
+        
+        row = self.layout.row(align=True)
+        row.operator("io_pdx_mesh.transfer_anim_from_file", icon="FILE_REFRESH", text="Transfer anim keys ...")
 
         self.layout.label(text="Export:", icon="EXPORT")
         row = self.layout.row(align=True)
         row.operator("io_pdx_mesh.export_mesh", icon="MESH_CUBE", text="Save mesh ...")
         row.operator("io_pdx_mesh.export_anim", icon="RENDER_ANIMATION", text="Save anim ...")
+        
 
 
 class IOPDX_PT_PDXblender_tools(PDXUI, Panel):
