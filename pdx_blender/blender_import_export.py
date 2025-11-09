@@ -2110,6 +2110,7 @@ def transfer_anim_keys_from_file(
     ignore_missing_bones: bool = True,
     only_selected_bones: bool = False,
     skip_eye_bones=False,
+    preserve_end_frame=True
 ):
     """
     Load keys from old_animpath, then overwrite matching bone attributes in the current action,
@@ -2135,7 +2136,8 @@ def transfer_anim_keys_from_file(
     bpy.context.scene.render.fps = fps
     bpy.context.scene.render.fps_base = 1.0
     bpy.context.scene.frame_start = frame_start
-    bpy.context.scene.frame_end = frame_start + framecount - 1
+    if not preserve_end_frame:
+        bpy.context.scene.frame_end = frame_start + framecount - 1
 
     # remove destination curves for the attributes we will overwrite
     for bone_name, bone_keys in keydict.items():

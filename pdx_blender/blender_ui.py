@@ -522,6 +522,11 @@ class IOPDX_OT_transfer_anim_from_file(Operator, ImportHelper):
         description="Frame where old keys will be pasted",
         default=1,
     )
+    preserve_end_frame: BoolProperty(
+        name="Preserve end frame",
+        description="Do not modify the scene's final frame when transferring animation",
+        default=True
+    )
     opt_rotation: BoolProperty(
         name="Overwrite rotation",
         description="Overwrite all bone rotation animation data with source animation.",
@@ -559,6 +564,7 @@ class IOPDX_OT_transfer_anim_from_file(Operator, ImportHelper):
         box.label(text="Transfer settings:", icon="FILE_REFRESH")
         col = box.column(align=True)
         col.prop(self, "int_start")
+        col.prop(self, "preserve_end_frame")
 
         box = col.box()
         box.label(text="Overwrite:")
@@ -590,6 +596,7 @@ class IOPDX_OT_transfer_anim_from_file(Operator, ImportHelper):
                 ignore_missing_bones=self.ignore_missing_bones,
                 only_selected_bones=self.only_selected_bones,
                 skip_eye_bones=self.skip_eye_bones,
+                preserve_end_frame=self.preserve_end_frame  # new arg
             )
             self.report({"INFO"}, "[io_pdx_mesh] Transferred keys from {}".format(self.filepath))
             IO_PDX_SETTINGS.last_import_anim = self.filepath
