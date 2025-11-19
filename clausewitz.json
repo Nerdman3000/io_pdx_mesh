@@ -151,5 +151,40 @@
             "standard",
             "tree"
         ]
-    }
+    },
+	"europa_universalis_5": {
+		"material": [
+			"Collision",
+			"PdxMeshColor",
+			"PdxMeshStandard",
+			"PdxMeshTextureAtlas",
+			"decal_local",
+            "decal_world",
+            "lake",
+			"material_test",
+			"billboard_test",
+			"portrait_skin",
+			"portrait_hair",
+			"portrait_hair_alpha",
+			"portrait_hair_opaque",
+			"portrait_eye",
+			"portrait_attachment",
+			"portrait_attachment_alpha_to_coverage",
+			"portrait_attachment_pattern",
+			"portrait_attachment_pattern_alpha_to_coverage",
+			"snap_to_terrain_alpha_to_coverage_colormap",
+            "snap_to_terrain_alpha_to_coverage",
+            "snap_to_terrain",
+			"snap_to_terrain_atlas",
+			"snap_to_terrain_no_deform",
+			"standard",
+			"standard_alpha_blend",
+			"standard_alpha_to_coverage",
+			"standard_atlas",
+			"standard_building",
+			"standard_usercolor",
+			"standard_usercolor_coa",
+			"tree"
+		]
+	}
 }
