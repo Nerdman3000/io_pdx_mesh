@@ -224,7 +224,7 @@ def get_material_textures(blender_material):
     return texture_dict
 
 
-def get_mesh_info(blender_obj, mat_id, split_criteria=None, split_all=False, sort_vertices=True):
+def get_mesh_info(blender_obj, mat_id, split_criteria=None, split_all=False, sort_vertices=True, triangulate=False):
     """Returns a dictionary of mesh information neccessary to the exporter.
 
     This performs a tri-split on all points to create unique vertices where points have split UV or Normal data.
@@ -237,6 +237,14 @@ def get_mesh_info(blender_obj, mat_id, split_criteria=None, split_all=False, sor
     mesh = blender_obj.data.copy()  # blender_obj.to_mesh(bpy.context.scene, True, 'PREVIEW')
     mesh.name = blender_obj.data.name + "_export"
     mesh.transform(blender_obj.matrix_world)
+
+    if triangulate:
+        bm = bmesh.new()
+        bm.from_mesh(mesh)
+        bmesh.ops.triangulate(bm, faces=bm.faces[:], quad_method='FIXED', ngon_method='BEAUTY')
+        bm.to_mesh(mesh)
+        bm.free()
+
     mesh.calc_loop_triangles()
     try:  # Blender < 4.1
         # https://developer.blender.org/docs/release_notes/4.1/python_api/#mesh
@@ -1356,6 +1364,8 @@ def export_meshfile(meshpath, exp_mesh=True, exp_skel=True, exp_locs=True, exp_s
     sort_verts = {"+": True, "~": None, "-": False}.get(kwargs.get("sort_verts", "+"))
     # with plain text file option
     plain_txt = kwargs.get("plain_txt", False)
+    # NEW: Capture triangulate option
+    triangulate = kwargs.get("triangulate", False)
 
     start = time.time()
     IO_PDX_LOG.info("exporting - {0}".format(meshpath))
@@ -1411,7 +1421,7 @@ def export_meshfile(meshpath, exp_mesh=True, exp_skel=True, exp_locs=True, exp_s
 
                 # get all necessary info about this set of faces and determine which unique verts they include
                 mesh_info_dict, vert_ids = get_mesh_info(
-                    obj, mat_idx, split_criteria=split_by, split_all=split_verts, sort_vertices=sort_verts
+                    obj, mat_idx, split_criteria=split_by, split_all=split_verts, sort_vertices=sort_verts, triangulate=triangulate
                 )
                 # skip material slots that are used on no faces
                 if not (mesh_info_dict and vert_ids):
@@ -1532,6 +1542,7 @@ def export_meshfile(meshpath, exp_mesh=True, exp_skel=True, exp_locs=True, exp_s
                 split_verts=kwargs.get("split_verts", False),
                 sort_verts=kwargs.get("sort_verts", "+"),
                 plain_txt=kwargs.get("plain_txt", False),
+                triangulate=triangulate,
             )
 
             # Robust cleanup of the temporary objects and their data

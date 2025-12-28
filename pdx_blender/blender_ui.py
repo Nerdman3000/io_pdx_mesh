@@ -719,27 +719,6 @@ class IOPDX_OT_export_mesh(Operator, ExportHelper):
 
     def execute(self, context):
         try:
-            temp_objects = []
-
-            if self.triangulate_mesh:
-                objs = context.selected_objects if self.chk_selected else bpy.data.objects
-
-                for obj in objs:
-                    if obj.type == "MESH":
-                        dup = obj.copy()
-                        dup.data = obj.data.copy()
-                        context.collection.objects.link(dup)
-
-                        mod = dup.modifiers.new(name="TriangulateForExport", type="TRIANGULATE")
-                        context.view_layer.objects.active = dup
-                        bpy.ops.object.modifier_apply(modifier=mod.name)
-
-                        temp_objects.append((obj, dup))
-
-                # Hide originals
-                for orig, dup in temp_objects:
-                    orig.hide_viewport = True
-                    dup.hide_viewport = False           
             export_meshfile(
                 self.filepath,
                 exp_mesh=self.chk_mesh,
@@ -752,11 +731,8 @@ class IOPDX_OT_export_mesh(Operator, ExportHelper):
                 split_verts=self.chk_split_vtx,
                 sort_verts=self.ddl_sort_vtx,
                 plain_txt=self.chk_plain_txt,
+                triangulate=self.triangulate_mesh,  # Pass the setting here
             )
-            if self.triangulate_mesh:
-                for orig, dup in temp_objects:
-                    orig.hide_viewport = False
-                    bpy.data.objects.remove(dup, do_unlink=True)
             self.report({"INFO"}, "[io_pdx_mesh] Finsihed exporting {}".format(self.filepath))
             IO_PDX_SETTINGS.last_export_mesh = self.filepath
 
